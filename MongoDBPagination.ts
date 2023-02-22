@@ -31,80 +31,60 @@ import { Collection, ObjectId } from 'mongodb';
  * @param query - This is an array of objects that will be passed to the aggregate function.
  * @returns An object with the following properties:
  */
-export async function Paginate<CollectionType>(
+export async function paginate<CollectionType>(
     collection: Collection<CollectionType>,
     limitDoc = 10,
     lastID = null,
     query = [],
+    sort: string = 'DESC',
 ) {
-    if (lastID) {
-        const result = await collection
-            .aggregate([
-                ...query,
-                {
-                    $match: {
-                        _id: { $gt: lastID },
+    // based on the lastID, we need to create a query that will return the next page
+    const lastIdQuery = {
+        ...(sort === 'DESC' && {
+            $lt: ['$$item._id', lastID],
+        }),
+        ...(sort === 'ASC' && {
+            $gt: ['$$item._id', lastID],
+        }),
+    };
+
+    const result = await collection
+        .aggregate([
+            ...query,
+            {
+                $sort: {
+                    _id: sort === 'DESC' ? -1 : 1,
+                },
+            },
+            {
+                $group: {
+                    _id: {},
+                    items: { $push: '$$ROOT' },
+                    total: {
+                        $sum: 1,
                     },
                 },
-                {
-                    $group: {
-                        _id: {},
-                        data: { $push: '$$ROOT' },
-                        total: {
-                            $sum: 1,
+            },
+            {
+                $project: {
+                    _id: 0,
+                    total: 1,
+                    items: {
+                        $filter: {
+                            input: '$items',
+                            as: 'item',
+                            cond: lastID ? lastIdQuery : {},
+                            limit: limitDoc,
                         },
                     },
                 },
-                {
-                    $project: {
-                        _id: 0,
-                        total: 1,
-                        data: { $slice: ['$data', limitDoc] },
-                    },
-                },
-                {
-                    $sort: {
-                        'data._id': -1,
-                    },
-                },
-            ])
-            .toArray();
+            },
+        ])
+        .toArray();
 
-        result[0].lastId = result[0]?.data.at(-1)?._id;
+    if (result[0]) result[0].lastId = result[0]?.items.at(-1)?._id;
 
-        return result[0];
-    } else {
-        const result = await collection
-            .aggregate([
-                ...query,
-                {
-                    $group: {
-                        _id: {},
-                        data: { $push: '$$ROOT' },
-                        total: {
-                            $sum: 1,
-                        },
-                    },
-                },
-                {
-                    $project: {
-                        _id: 0,
-                        total: 1,
-                        data: { $slice: ['$data', limitDoc] },
-                    },
-                },
-                {
-                    $sort: {
-                        'data._id': -1,
-                    },
-                },
-            ])
-            .toArray();
-
-        result[0].lastId = result[0]?.data.at(-1)?._id;
-
-        return result[0];
-    }
+    return result[0];
 }
 
 /* It's a class that represents a paginated response */
